@@ -183,13 +183,13 @@ if $alone; then
 else
     say "building pleamar and pleamar-wm (the first time takes a few minutes)"
 fi
-(cd "$src/pleamar" && cargo build --release --quiet) || fail "pleamar did not build"
+(cd "$src/pleamar" && cargo build --release) || fail "pleamar did not build"
 if ! $alone; then
-    (cd "$src/pleamar-wm" && cargo build --release --quiet) || fail "pleamar-wm did not build"
+    (cd "$src/pleamar-wm" && cargo build --release) || fail "pleamar-wm did not build"
     # The remote desktop's video (pleamar-wm-stream): it needs ffmpeg's
     # development files; without them the remote uses wf-recorder.
     if $remote || [ -x "$bin/pleamar-wm-stream" ]; then
-        (cd "$src/pleamar-wm" && cargo build --release --quiet -p pleamar-wm-stream) || say "remote: its own video did not build (ffmpeg's development files?): wf-recorder is used"
+        (cd "$src/pleamar-wm" && cargo build --release -p pleamar-wm-stream) || say "remote: its own video did not build (ffmpeg's development files?): wf-recorder is used"
     fi
 fi
 
