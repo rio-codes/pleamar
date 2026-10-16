@@ -245,6 +245,8 @@ struct Compiler<'a> {
     pending_levels: Vec<(usize, Level, &'a [Token], (usize, usize))>,
     /// `reserve: n while expr`: read at the end, like the levels.
     pending_reserves: Vec<(usize, &'a [Token], (usize, usize))>,
+    /// `rate: 60, 20 while …`: the surface, the lower rate and its condition.
+    pending_rates: Vec<(usize, u32, &'a [Token], (usize, usize))>,
     /// `anchor: corner`, with `corner` a fact: which surface, which name and where.
     pending_anchors: Vec<(usize, String, (usize, usize))>,
     /// The names of the files it is made of, to say where something is.
@@ -401,7 +403,7 @@ pub fn compile<'a>(tree: &'a [Entry], files: &'a [String], dirs: &'a [std::path:
             other => unreachable!("'{other}' is in the vocabulary, but it has no stiffness or damping"),
         })).collect(),
         under: Vec::new(), candidates: Vec::new(), zparents: vec![0], next_zparent: 1, zblock: None, rules: Vec::new(), errors: Vec::new(), declared: Vec::new(), used: Default::default(), current_class: String::new(),
-        scrolls: Vec::new(), row_scrolls: Default::default(), pending_surfaces: Vec::new(), pending_levels: Vec::new(), pending_reserves: Vec::new(), hover_mentions: Default::default(), zone_springs: Vec::new(), pending_anchors: Vec::new(), files, dirs, strict_files, libraries, boundary_of: HashMap::new(), permissions_of: HashMap::new(), pass: 0, next_origin: 0.0, values: HashMap::new(), ambiguous: Default::default(), instance_children: Vec::new(), from_library: Default::default(), unrequested: Default::default(), unwatched: Default::default(), hiding_noted: Default::default(), in_letters: Default::default(), scopes: Vec::new(), components: HashMap::new(), copies: 0, let_props: HashMap::new(), copy_props: Default::default(), later_copy: false, effects_depth: 0, in_slot: false, last_size: None, imposed_measure: None, pending_keyboard: None, prop_sites: HashMap::new(),
+        scrolls: Vec::new(), row_scrolls: Default::default(), pending_surfaces: Vec::new(), pending_levels: Vec::new(), pending_reserves: Vec::new(), pending_rates: Vec::new(), hover_mentions: Default::default(), zone_springs: Vec::new(), pending_anchors: Vec::new(), files, dirs, strict_files, libraries, boundary_of: HashMap::new(), permissions_of: HashMap::new(), pass: 0, next_origin: 0.0, values: HashMap::new(), ambiguous: Default::default(), instance_children: Vec::new(), from_library: Default::default(), unrequested: Default::default(), unwatched: Default::default(), hiding_noted: Default::default(), in_letters: Default::default(), scopes: Vec::new(), components: HashMap::new(), copies: 0, let_props: HashMap::new(), copy_props: Default::default(), later_copy: false, effects_depth: 0, in_slot: false, last_size: None, imposed_measure: None, pending_keyboard: None, prop_sites: HashMap::new(),
     };
     // Two facts that always exist: what the surface really measures. The
     // render sets them when the compositor configures it.
@@ -576,6 +578,19 @@ pub fn compile<'a>(tree: &'a [Entry], files: &'a [String], dirs: &'a [std::path:
                 let owner = o.e.surfaces[which].name.clone();
                 for s in o.e.surfaces.iter_mut().filter(|s| s.name == owner) {
                     s.reserve_while = Some(e.clone());
+                }
+            }
+            Err(f) => o.errors.push(f),
+        }
+    }
+    for (which, low, tokens, (l, col)) in std::mem::take(&mut o.pending_rates) {
+        o.scopes.clear();
+        let mut c = Cur::new(tokens, l, col);
+        match o.expr(&mut c) {
+            Ok(e) => {
+                let owner = o.e.surfaces[which].name.clone();
+                for s in o.e.surfaces.iter_mut().filter(|s| s.name == owner) {
+                    s.rate_while = Some((low, e.clone()));
                 }
             }
             Err(f) => o.errors.push(f),
@@ -3147,6 +3162,15 @@ impl<'a> Compiler<'a> {
         if let Some(c) = p.get_mut("lines") {
             style.max_lines = Some(c.num()? as usize);
         }
+        if let Some(c) = p.get_mut("markdown") {
+            let v = c.id("true or false")?;
+            c.expect_end()?;
+            style.markdown = match v.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => return c.error("`markdown` is true or false"),
+            };
+        }
         if let Some(c) = p.get_mut("family") {
             style.family = Some(interned(&c.string()?));
         }
@@ -4053,11 +4077,22 @@ impl<'a> Compiler<'a> {
         }
         if let Some(c) = p.get_mut("rate") {
             let r = c.num()?;
-            c.expect_end()?;
             if !(1.0..=480.0).contains(&r) {
                 return Err(CompileError::at(n.line, n.col, "`rate` is how many frames a second at most, from 1 to 480; without it, the monitor's"));
             }
             s.max_fps = r as u32;
+            // `rate: 60, 20 while asleep`: fewer still while that holds.
+            if c.sym(",") {
+                let low = c.num()?;
+                if !(1.0..=r).contains(&low) {
+                    return Err(CompileError::at(n.line, n.col, format!("the second `rate` is the lower one, for while something holds: from 1 to {r}")));
+                }
+                c.expect_word("while")?;
+                self.pending_rates.push((which, low as u32, &c.tokens[c.i..], c.pos()));
+                c.i = c.tokens.len();
+            } else {
+                c.expect_end()?;
+            }
         }
         if let Some(c) = p.get_mut("screens") {
             s.screens = if c.word("all") {
@@ -6140,7 +6175,11 @@ impl<'a> Compiler<'a> {
         self.unwatched.set(true);
         for (n, scopes) in &rules {
             self.scopes = scopes.clone();
-            for f in &n.head {
+            let feedback = n.body.as_deref().unwrap_or(&[]).iter().filter_map(|e| match e {
+                Entry::Node(n) if matches!(n.head.first().map(|t| &t.kind), Some(TokenKind::Id(s)) if s == "ripple") => n.head.get(1),
+                _ => None,
+            });
+            for f in n.head.iter().chain(feedback) {
                 if let TokenKind::Id(s) = &f.kind {
                     let g = self.global(s);
                     if let Some(m) = self.screen_mark() {
@@ -6308,6 +6347,7 @@ impl<'a> Compiler<'a> {
                     let mut c = Cur::new(&x.head, x.line, x.col);
                     let p = c.id("an effect")?;
                     effects.push(match if vocab::EFFECTS.contains(&p.as_str()) { p.as_str() } else { "" } {
+                        "ripple" => Effect::Ripple(self.zone(&mut c)?),
                         "toggle" => Effect::Toggle(self.fact(&mut c)?),
                         "blur" => Effect::FocusField(None),
                         "focus" if self.names_window(&c) => Effect::Window(WindowAction::Focus, self.which_window(&mut c)?),

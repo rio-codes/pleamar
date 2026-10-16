@@ -931,6 +931,12 @@ mod thumbnails;
 /// names it, for the image that draws it.
 #[cfg(target_os = "linux")]
 pub use thumbnails::{frame as thumbnail_frame, Frame as ThumbnailFrame};
+/// Live windows copied on the card: the buffers asked of the render, its
+/// answers, and which of them are still in use.
+#[cfg(target_os = "linux")]
+pub use thumbnails::{checked as thumbnail_checked, checks as thumbnail_checks, on_check as thumbnail_on_check};
+#[cfg(target_os = "linux")]
+pub use thumbnails::{cards as thumbnail_cards, offer as thumbnail_offer, wants as thumbnail_wants, Offer as ThumbnailOffer};
 #[cfg(not(target_os = "linux"))]
 pub struct ThumbnailFrame {
     pub version: u64,
@@ -938,6 +944,8 @@ pub struct ThumbnailFrame {
     pub height: u32,
     pub pixels: Vec<u8>,
     pub opaque: bool,
+    /// Never on the card here.
+    pub card: Option<()>,
 }
 #[cfg(not(target_os = "linux"))]
 pub fn thumbnail_frame(_: &str) -> Option<std::sync::Arc<ThumbnailFrame>> {

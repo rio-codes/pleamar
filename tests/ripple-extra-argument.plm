@@ -1,0 +1,6 @@
+// expect: error «this is left over here»
+scene Ripple {
+    event show
+    zone box hit { from: 0, 0; size: 20, 20 }
+    on show { ripple hit 20 }
+}

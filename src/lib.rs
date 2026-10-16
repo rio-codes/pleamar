@@ -19,6 +19,7 @@ mod agent;
 #[cfg(target_os = "linux")]
 pub mod dmabuf;
 mod lens;
+mod markdown;
 mod language;
 mod logic;
 #[cfg(feature = "luau")]
@@ -240,6 +241,14 @@ pub fn run_with(options: Vec<String>) {
     skill::refresh_quietly();
     let blocked = Arc::new(AtomicBool::new(false));
     let (to_render, from_render) = channel();
+    // The thumbnails service's frames on the card, summed by the render.
+    #[cfg(target_os = "linux")]
+    {
+        let tx = std::sync::Mutex::new(to_render.clone());
+        platform::thumbnail_on_check(Box::new(move || {
+            let _ = tx.lock().unwrap().send(scene::ToRender::Thumbnails);
+        }));
+    }
     let (to_logic, from_logic) = channel();
     let mut script: Box<dyn logic::Script> = match a.scene.as_str() {
         "marea" => Box::<scenes::marea::Marea>::default(),

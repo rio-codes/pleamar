@@ -1,0 +1,6 @@
+// A surface that paints fewer frames while something holds: 60 a second, 20 asleep.
+scene Breath {
+    surface { size: 200, 200; anchor: center; rate: 60, 20 while asleep }
+    fact asleep = false
+    ellipse { at: 100, 100; radius: 40 + sin(time * 2) * 2; color: #7fd1b9 }
+}

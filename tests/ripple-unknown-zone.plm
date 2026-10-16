@@ -1,0 +1,5 @@
+// expect: error «no named shape or zone»
+scene Ripple {
+    event show
+    on show { ripple missing }
+}

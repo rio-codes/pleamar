@@ -1,0 +1,8 @@
+// expect: ok
+// A model's answer: its marks are read, not shown —bold, italics, code,
+// a title, points—, and it can still be selected and copied.
+scene MarkdownText {
+    surface { size: 420, 200; kind: window; title: "markdown" }
+    text said = "## Ideas\n- **A voice assistant**: a *small* microphone.\n- Try `arecord -l`."
+    text said { at: 12, 12; width: 396; size: 14; color: #e8ecea; markdown: true; selectable: true }
+}

@@ -1,0 +1,5 @@
+// expect: error «`markdown` is true or false»
+scene MarkdownWrong {
+    surface { size: 200, 60; kind: window; title: "markdown" }
+    text "**hi**" { at: 12, 12; size: 14; color: #ffffff; markdown: yes }
+}

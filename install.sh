@@ -161,6 +161,11 @@ for r in $repos; do
         say "$r: your copy in $src/$r, built as it is"
     elif [ -d "$src/$r/.git" ]; then
         before=$(git -C "$src/$r" rev-parse HEAD)
+        # A build rewrites Cargo.lock by itself (pleamar-wm's records pleamar's version, which moves ahead of the committed
+        # one). That is not a change of yours: if it is the only one, put it back, or the repo would never be updated.
+        if [ "$(git -C "$src/$r" status --porcelain --untracked-files=no)" = " M Cargo.lock" ]; then
+            git -C "$src/$r" checkout -- Cargo.lock
+        fi
         if git -C "$src/$r" diff --quiet && git -C "$src/$r" diff --cached --quiet; then
             git -C "$src/$r" pull --ff-only --quiet || say "$r: could not bring it up to date (left as it was)"
         else

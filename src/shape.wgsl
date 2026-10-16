@@ -370,7 +370,7 @@ fn fs(e: VertexOut) -> @location(0) vec4<f32> {
             if (el.header.z < -1.5) { return vec4<f32>(w.rgb, 1.0) * alpha; }
             return w * alpha;
         }
-        let t = textureSampleLevel(atlas, atlas_sampler, mix(el.uv.xy, el.uv.zw, uv01), 0.0);
+        let t = textureSampleLevel(atlas, atlas_sampler, mix(el.uv.xy, el.uv.zw, uv01) / vec2<f32>(textureDimensions(atlas)), 0.0);
         // Tinted: the piece is a mask —a letter (2), a symbolic icon (1)— and the element provides the colour.
         // A letter (2) gets its edges firmed up. Blended as they are, in sRGB,
         // a stem that falls across two pixels —most of them: the letters are
@@ -881,7 +881,7 @@ fn fs_particle(e: ParticleOut) -> @location(0) vec4<f32> {
 fn glyph_at(el: Element, q: vec2<f32>) -> f32 {
     let uv01 = (q - el.dest.xy) / max(el.dest.zw, vec2<f32>(1.0));
     if (uv01.x < 0.0 || uv01.x > 1.0 || uv01.y < 0.0 || uv01.y > 1.0) { return 0.0; }
-    return textureSampleLevel(atlas, atlas_sampler, mix(el.uv.xy, el.uv.zw, uv01), 0.0).a;
+    return textureSampleLevel(atlas, atlas_sampler, mix(el.uv.xy, el.uv.zw, uv01) / vec2<f32>(textureDimensions(atlas)), 0.0).a;
 }
 
 // color0 the letter's colour · color1 the shadow's colour, and the gradient's kind ·

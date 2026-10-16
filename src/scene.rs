@@ -152,6 +152,9 @@ pub struct Surface {
     /// that breathes does not need 165 frames per second, and painting them is what
     /// costs: with this, what it consumes is the same on any screen.
     pub max_fps: u32,
+    /// `rate: 60, 20 while asleep`: fewer frames still while that holds —a
+    /// character breathing in its sleep does not need sixty a second—.
+    pub rate_while: Option<(u32, Expr)>,
     pub screens: Screens,
     pub keyboard: Keyboard,
     /// The keyboard is only requested while `Scene::keyboard_while` holds.
@@ -179,7 +182,7 @@ pub enum Keyboard {
 impl Default for Surface {
     fn default() -> Self {
         // Neutral: full width, at the top, on all monitors. Whatever the scene asks for wins.
-        Surface { name: String::new(), instance: 0, origin: (0.0, 0.0), open: None, window: None, lock_screen: false, width: 0, size_props: None, cursor_props: None, height: 40, anchor: SurfaceAnchor::Top, anchor_from: None, level_while: None, margin: [0; 4], level: Level::Above, exclusive_zone: 0, reserve_while: None, max_fps: 0, screens: Screens::All, keyboard: Keyboard::Never, keyboard_while: false, right_click_quits: true, hidden_from_captures: false, agent_hidden: false }
+        Surface { name: String::new(), instance: 0, origin: (0.0, 0.0), open: None, window: None, lock_screen: false, width: 0, size_props: None, cursor_props: None, height: 40, anchor: SurfaceAnchor::Top, anchor_from: None, level_while: None, margin: [0; 4], level: Level::Above, exclusive_zone: 0, reserve_while: None, max_fps: 0, rate_while: None, screens: Screens::All, keyboard: Keyboard::Never, keyboard_while: false, right_click_quits: true, hidden_from_captures: false, agent_hidden: false }
     }
 }
 
@@ -1107,11 +1110,13 @@ pub struct Style {
     pub align: TextAlign,
     /// Beyond this many lines, an ellipsis.
     pub max_lines: Option<usize>,
+    /// `markdown: true`: its marks are read, not shown (`crate::markdown`).
+    pub markdown: bool,
 }
 
 impl Style {
     pub fn new(px: f32, color: Color) -> Self {
-        Style { family: None, px, weight: 400, color, line_height: 1.3, align: TextAlign::Left, max_lines: None }
+        Style { family: None, px, weight: 400, color, line_height: 1.3, align: TextAlign::Left, max_lines: None, markdown: false }
     }
     pub fn weight(mut self, p: u16) -> Self {
         self.weight = p;
@@ -1697,6 +1702,8 @@ pub enum Effect {
     /// fires, so it can depend on what is going on: the bounce of
     /// a countdown decreases with the number that is left.
     Impulse(PropId, Expr),
+    /// A ring of light from the centre of a zone, without pressing it.
+    Ripple(ZoneId),
     Gesture(GestureId),
     /// Put the text cursor in a field, or take it away.
     FocusField(Option<TextId>),
@@ -2173,6 +2180,10 @@ pub enum ToRender {
     /// The logic has finished with the frame it was told of: what it said
     /// while at it came before this, and goes into the frame being made.
     FrameSeen,
+    /// Live windows' frames on the card to be summed, for the thumbnails
+    /// service to tell a new picture from the same one again: answered
+    /// without a round, at rest too.
+    Thumbnails,
     /// The name of the key, what it types if it types anything, and what it was pressed with.
     /// And its evdev code, to hand it to a window of the scene's compositor (0 if made up).
     Key(String, Option<String>, Mods, u32),

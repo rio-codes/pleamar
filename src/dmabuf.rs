@@ -382,6 +382,204 @@ impl YuvToRgb {
     }
 }
 
+/// A live window's frame on the card (`thumbnails.live`) made the size it is
+/// drawn at, straight into the atlas: what `text::fit_frame` does in memory
+/// with a frame copied there, the same way —each pixel the mean of the box of
+/// the window's it covers, or filtered when made larger; colours kept
+/// premultiplied; alpha 1 for a window without it—, and the rest of the slot
+/// and its gutter transparent.
+pub struct FitFrame {
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+}
+
+const FIT_SHADER: &str = r#"
+struct Fit { inner: vec4<f32>, source: vec2<f32>, opaque: f32, pad: f32 };
+@group(0) @binding(0) var t: texture_2d<f32>;
+@group(0) @binding(1) var s: sampler;
+@group(0) @binding(2) var<uniform> fit: Fit;
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+}
+@fragment fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let o = p.xy - fit.inner.xy;
+    let n = fit.inner.zw;
+    if o.x < 0.0 || o.y < 0.0 || o.x >= n.x || o.y >= n.y {
+        return vec4<f32>(0.0);
+    }
+    var c: vec4<f32>;
+    if n.x <= fit.source.x && n.y <= fit.source.y {
+        // The window's pixels this one covers, as the workshop counts them;
+        // at most 16 a side read, evenly spread, for a large window made very small.
+        let i = floor(o);
+        let a = floor(i * fit.source / n);
+        let b = max(floor((i + 1.0) * fit.source / n), a + 1.0);
+        let step = max(vec2<f32>(1.0), ceil((b - a) / 16.0));
+        var sum = vec4<f32>(0.0);
+        var count = 0.0;
+        for (var y = a.y; y < b.y; y += step.y) {
+            for (var x = a.x; x < b.x; x += step.x) {
+                sum += textureLoad(t, vec2<i32>(i32(x), i32(y)), 0);
+                count += 1.0;
+            }
+        }
+        c = sum / count;
+    } else {
+        c = textureSampleLevel(t, s, o / n, 0.0);
+    }
+    if fit.opaque > 0.5 {
+        c.a = 1.0;
+    }
+    return c;
+}
+"#;
+
+impl FitFrame {
+    /// Painting into textures of that format (the atlas's).
+    pub fn new(device: &wgpu::Device, target: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("a live window made small"), source: wgpu::ShaderSource::Wgsl(FIT_SHADER.into()) });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("a live window made small"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("a live window made small"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("a live window made small"),
+            layout: Some(&pl),
+            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs"), targets: &[Some(wgpu::ColorTargetState { format: target, blend: None, write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        // Linear, for a window made larger (the workshop's triangle filter).
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
+        FitFrame { pipeline, layout, sampler }
+    }
+
+    /// `source` (the window, BGRA) into `inner` of `target`, and the rest of
+    /// `padded` transparent: both `[x, y, width, height]` in its pixels.
+    pub fn fit(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, source: &wgpu::Texture, target: &wgpu::TextureView, (padded, inner): ([u32; 4], [u32; 4]), opaque: bool) {
+        let view = source.create_view(&Default::default());
+        let values: [f32; 8] = [inner[0] as f32, inner[1] as f32, inner[2] as f32, inner[3] as f32, source.width() as f32, source.height() as f32, if opaque { 1.0 } else { 0.0 }, 0.0];
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 32, usage: wgpu::BufferUsages::UNIFORM, mapped_at_creation: true });
+        if let Ok(mut m) = buffer.slice(..).get_mapped_range_mut() {
+            m.copy_from_slice(bytemuck::cast_slice(&values));
+        }
+        buffer.unmap();
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: buffer.as_entire_binding() },
+            ],
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("a live window made small"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: target, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        let [x, y, w, h] = padded;
+        pass.set_viewport(x as f32, y as f32, w.max(1) as f32, h.max(1) as f32, 0.0, 1.0);
+        pass.set_scissor_rect(x, y, w.max(1), h.max(1));
+        pass.draw(0..3, 0..1);
+    }
+}
+
+/// Eight bytes that tell a live window's frame on the card from the last one,
+/// without reading it back: Hyprland fills a waiting frame each time the
+/// monitor redraws (the overview drawing it, too), and damages all of it every
+/// time, so only the pixels can say it is the same.
+pub struct HashFrame {
+    /// For a frame whose alpha counts, and for one whose alpha is anything (XRGB).
+    pipelines: [wgpu::ComputePipeline; 2],
+    layout: wgpu::BindGroupLayout,
+}
+
+const HASH_SHADER: &str = r#"
+@group(0) @binding(0) var t: texture_2d<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<atomic<u32>, 2>;
+var<workgroup> a: atomic<u32>;
+var<workgroup> b: atomic<u32>;
+fn mix(x: u32) -> u32 {
+    var h = x;
+    h ^= h >> 16u;
+    h *= 0x7feb352du;
+    h ^= h >> 15u;
+    h *= 0x846ca68bu;
+    h ^= h >> 16u;
+    return h;
+}
+@compute @workgroup_size(16, 16) fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_index) l: u32) {
+    let n = textureDimensions(t);
+    if g.x < n.x && g.y < n.y {
+        // XRGB's alpha byte is anything: colour only there. ARGB's counts, as
+        // see-through black and opaque black have the same colour.
+        let p = pack4x8unorm(textureLoad(t, vec2<i32>(g.xy), 0)) & MASK;
+        let i = g.y * n.x + g.x;
+        // Each pixel mixed with where it is, so two pixels swapped are a change.
+        atomicAdd(&a, mix(p ^ (i * 0x9e3779b9u)));
+        atomicAdd(&b, mix((p + i * 0x85ebca6bu) ^ 0x27d4eb2fu));
+    }
+    workgroupBarrier();
+    if l == 0u {
+        atomicAdd(&out[0], atomicLoad(&a));
+        atomicAdd(&out[1], atomicLoad(&b));
+    }
+}
+"#;
+
+impl HashFrame {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("a live window's frame told apart"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: wgpu::BufferSize::new(8) }, count: None },
+            ],
+        });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("a live window's frame told apart"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+        let pipelines = ["0xffffffffu", "0x00ffffffu"].map(|mask| {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("a live window's frame told apart"), source: wgpu::ShaderSource::Wgsl(HASH_SHADER.replace("MASK", mask).into()) });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: Some("a live window's frame told apart"), layout: Some(&pl), module: &shader, entry_point: Some("main"), compilation_options: Default::default(), cache: None })
+        });
+        HashFrame { pipelines, layout }
+    }
+
+    /// `source`'s pixels into the 8 bytes of `out` at `offset`, which must be zero
+    /// before (and aligned for storage); its alpha left out if `opaque`.
+    pub fn hash(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, source: &wgpu::Texture, opaque: bool, (out, offset): (&wgpu::Buffer, u64)) {
+        let view = source.create_view(&Default::default());
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: out, offset, size: wgpu::BufferSize::new(8) }) },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("a live window's frame told apart"), timestamp_writes: None });
+        pass.set_pipeline(&self.pipelines[opaque as usize]);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups(source.width().div_ceil(16), source.height().div_ceil(16), 1);
+    }
+}
+
 /// The modifiers the card can read a format with, for that use (any number of planes).
 pub fn modifiers(adapter: &wgpu::Adapter, format: vk::Format, need: vk::FormatFeatureFlags) -> Vec<u64> {
     // SAFETY: only reading properties of the physical device wgpu uses.
@@ -417,8 +615,19 @@ pub struct Exported {
 /// CCS) need the image handed over to the other process with a barrier wgpu
 /// does not make, and a frame cleared to transparent could come out garbled.
 pub fn export(device: &wgpu::Device, size: (u32, u32), modifiers: &[u64]) -> Result<Exported, String> {
+    export_as(device, size, modifiers, false)
+}
+
+/// The same, the other way round: a texture the compositor paints in (a
+/// window it copies for `thumbnails.live`) and the card reads from. Its
+/// content is the compositor's, never cleared here.
+pub fn export_to_read(device: &wgpu::Device, size: (u32, u32), modifiers: &[u64]) -> Result<Exported, String> {
+    export_as(device, size, modifiers, true)
+}
+
+fn export_as(device: &wgpu::Device, size: (u32, u32), modifiers: &[u64], read: bool) -> Result<Exported, String> {
     let extent = wgpu::Extent3d { width: size.0.max(1), height: size.1.max(1), depth_or_array_layers: 1 };
-    let uses = wgpu::TextureUses::COLOR_TARGET | wgpu::TextureUses::COPY_DST;
+    let uses = if read { wgpu::TextureUses::RESOURCE } else { wgpu::TextureUses::COLOR_TARGET | wgpu::TextureUses::COPY_DST };
     let hal_desc = wgpu::hal::TextureDescriptor {
         label: Some("a frame of ours"),
         size: extent,
@@ -434,7 +643,7 @@ pub fn export(device: &wgpu::Device, size: (u32, u32), modifiers: &[u64]) -> Res
     // wgpu, which frees them (the callback) once nothing uses them.
     let (hal_texture, fd, modifier, planes) = unsafe {
         let hal = device.as_hal::<Vulkan>().ok_or("the card is not driven with Vulkan")?;
-        let (image, memory, fd, modifier, planes) = export_image(&hal, extent, modifiers)?;
+        let (image, memory, fd, modifier, planes) = export_image(&hal, extent, modifiers, read)?;
         let raw = hal.raw_device().clone();
         let free: wgpu::hal::DropCallback = Box::new(move || {
             raw.destroy_image(image, None);
@@ -449,11 +658,11 @@ pub fn export(device: &wgpu::Device, size: (u32, u32), modifiers: &[u64]) -> Res
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Bgra8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+        usage: if read { wgpu::TextureUsages::TEXTURE_BINDING } else { wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST },
         view_formats: &[],
     };
     // SAFETY: made on this device, as `desc` says.
-    let texture = unsafe { device.create_texture_from_hal::<Vulkan>(hal_texture, &desc, wgpu::TextureUses::UNINITIALIZED) };
+    let texture = unsafe { device.create_texture_from_hal::<Vulkan>(hal_texture, &desc, if read { uses } else { wgpu::TextureUses::UNINITIALIZED }) };
     Ok(Exported { texture, fd, modifier, planes })
 }
 
@@ -461,21 +670,26 @@ pub fn export(device: &wgpu::Device, size: (u32, u32), modifiers: &[u64]) -> Res
 /// and its planes.
 type ExportedImage = (vk::Image, vk::DeviceMemory, std::os::fd::OwnedFd, u64, Vec<(u32, u32)>);
 
-unsafe fn export_image(hal: &wgpu::hal::vulkan::Device, extent: wgpu::Extent3d, modifiers: &[u64]) -> Result<ExportedImage, String> {
+unsafe fn export_image(hal: &wgpu::hal::vulkan::Device, extent: wgpu::Extent3d, modifiers: &[u64], read: bool) -> Result<ExportedImage, String> {
     use std::os::fd::FromRawFd;
     let raw = hal.raw_device();
     let instance = hal.shared_instance().raw_instance();
     let pd = hal.raw_physical_device();
-    // Of the layouts the compositor reads, those the card paints in, of one plane.
-    let usage = vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST;
+    // Of the layouts the compositor takes, those the card paints in (or reads
+    // from), of one plane.
+    let (usage, need) = if read {
+        (vk::ImageUsageFlags::SAMPLED, vk::FormatFeatureFlags::SAMPLED_IMAGE)
+    } else {
+        (vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST, vk::FormatFeatureFlags::COLOR_ATTACHMENT | vk::FormatFeatureFlags::TRANSFER_DST)
+    };
     // SAFETY: only reading the physical device's properties.
     let one_plane: Vec<u64> = unsafe { plane_counts(instance, pd, vk::Format::B8G8R8A8_UNORM) }
         .into_iter()
-        .filter(|(m, planes, features)| *planes == 1 && features.contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT | vk::FormatFeatureFlags::TRANSFER_DST) && modifiers.contains(m))
+        .filter(|(m, planes, features)| *planes == 1 && features.contains(need) && modifiers.contains(m))
         .map(|(m, _, _)| m)
         .collect();
     if one_plane.is_empty() {
-        return Err("the compositor reads no layout of one plane the card paints in".into());
+        return Err(format!("the compositor takes no layout of one plane the card {}", if read { "reads" } else { "paints in" }));
     }
     let mut list = vk::ImageDrmFormatModifierListCreateInfoEXT::default().drm_format_modifiers(&one_plane);
     let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);

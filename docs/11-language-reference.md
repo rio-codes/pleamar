@@ -3,7 +3,7 @@
 **What this note is.** The complete, exact description of what the language accepts. [The language — the guide](09-language-v0.md) is the guide —read straight through, with the reason behind each thing—; this is where a doubt gets looked up. It comes from the compiler (`src/language/`), not from memory, and **it cannot fall behind without `./run-tests.sh` saying so**: its whole examples compile, and its vocabulary (§17) is compared against the one the compiler consults.
 
 ```sh
-pleamar --version                  # pleamar 0.4.6 · language 0.4
+pleamar --version                  # pleamar 0.4.13 · language 0.4
 pleamar --check scene.plm      # reads it, with whatever it imports; says whether it is fine, exits
 ./run-tests.sh                        # tests/*.plm, examples/*.plm and the examples in this note
 ```
@@ -123,7 +123,7 @@ trigger      = "press" [ "right" | "middle" ] zone_ref | "release" zone_ref | "s
              | name ;                                (* an event *)
 key          = name { "+" name } ;                   (* Escape · Ctrl+k · Super+Alt+s *)
 effect       = transition | name "=" expr | "toggle" name
-             | "emit" name [ "(" expr ")" ] | "impulse" name expr
+             | "emit" name [ "(" expr ")" ] | "impulse" name expr | "ripple" name
              | "play" name | "focus" name | "blur" ;
 
 behaviour    = "blink" name "every" duration [ ".." duration ] "for" duration
@@ -437,7 +437,7 @@ surface { size: 460, 320;  kind: window;  title: "pleamar · settings" }
 box { from: 0, 0;  size: screen.width, screen.height;  color: coal }
 ```
 
-**`surface`**: `size: width, height` (`full` as the width is the whole monitor, and as the height too: `size: full, full` is all of it; a named surface publishes what it really measures as `name.width` and `name.height`, which with `full` is the only way to know it) · `kind:` `panel` `window` `lock` · `title:` (a window only) · `anchor:` `top` `bottom` `left` `right` `top_left` `top_right` `bottom_left` `bottom_right` `center` — or **the name of a fact whose values are anchors** (`fact corner: top_left | top_right = top_right`, `anchor: corner`), and then it moves from edge to edge while it runs, without being recreated · `margin: n` or `top, right, bottom, left` · `level:` `background` `bottom` `top` `overlay` — or two, **`level: top, overlay while open`**: the first as a rule, the second while that holds, changed on the fly (a panel above the rest while it has something open, so a full-screen catcher can sit under it; in its place the rest of the time, so a full-screen video still covers it) · `reserve: n` (the room windows leave it; a surface `size: full, full` anchored to one edge keeps it too —a bar and its panels on one surface as tall as the monitor—: it sticks to that edge and the two across it, not to all four, where the compositor would ignore any reserve), or **`reserve: n while expr`**, only while that holds (a shell that lets you choose whether windows go under it or leave it its strip) · `rate: 60` (at most that many frames a second, on any monitor: what a scene costs is then the same on a 60 Hz screen and on a 165 Hz one; without it, the monitor's) · `screens: all` or `"HDMI-A-1", "DP-3"` · `captures:` `shown` `hidden` (hidden: seen on the monitor but left out of what is captured of it —a screenshot, a recording, a shared screen, a remote desktop—, for what is meant only for whoever sits in front of it; pleamar-wm does it, other compositors show it in captures too) · `agent: hidden` (what it holds is left out of what the scene tells an agent: §13, *Told to an agent*) · `keyboard:` `none` `on_demand` `exclusive`, and with `while expr` it only asks for it while that is true. With `on_demand` the compositor hands the keyboard over on a click; so when the scene does `focus` on a field without having the keyboard —a search opened from a shortcut, which nobody clicked— it is asked for as `exclusive` for as long as the `while` holds, and let go when it stops: that is how a launcher behaves, and Esc closing it is what gives it back.
+**`surface`**: `size: width, height` (`full` as the width is the whole monitor, and as the height too: `size: full, full` is all of it; a named surface publishes what it really measures as `name.width` and `name.height`, which with `full` is the only way to know it) · `kind:` `panel` `window` `lock` · `title:` (a window only) · `anchor:` `top` `bottom` `left` `right` `top_left` `top_right` `bottom_left` `bottom_right` `center` — or **the name of a fact whose values are anchors** (`fact corner: top_left | top_right = top_right`, `anchor: corner`), and then it moves from edge to edge while it runs, without being recreated · `margin: n` or `top, right, bottom, left` · `level:` `background` `bottom` `top` `overlay` — or two, **`level: top, overlay while open`**: the first as a rule, the second while that holds, changed on the fly (a panel above the rest while it has something open, so a full-screen catcher can sit under it; in its place the rest of the time, so a full-screen video still covers it) · `reserve: n` (the room windows leave it; a surface `size: full, full` anchored to one edge keeps it too —a bar and its panels on one surface as tall as the monitor—: it sticks to that edge and the two across it, not to all four, where the compositor would ignore any reserve), or **`reserve: n while expr`**, only while that holds (a shell that lets you choose whether windows go under it or leave it its strip) · `rate: 60` (at most that many frames a second, on any monitor: what a scene costs is then the same on a 60 Hz screen and on a 165 Hz one; without it, the monitor's), or **`rate: 60, 20 while asleep`**, fewer still while that holds (a character breathing in its sleep, a clock nobody looks at: slow motion does not need sixty frames a second, and each one is paid for) · `screens: all` or `"HDMI-A-1", "DP-3"` · `captures:` `shown` `hidden` (hidden: seen on the monitor but left out of what is captured of it —a screenshot, a recording, a shared screen, a remote desktop—, for what is meant only for whoever sits in front of it; pleamar-wm does it, other compositors show it in captures too) · `agent: hidden` (what it holds is left out of what the scene tells an agent: §13, *Told to an agent*) · `keyboard:` `none` `on_demand` `exclusive`, and with `while expr` it only asks for it while that is true. With `on_demand` the compositor hands the keyboard over on a click; so when the scene does `focus` on a field without having the keyboard —a search opened from a shortcut, which nobody clicked— it is asked for as `exclusive` for as long as the `while` holds, and let go when it stops: that is how a launcher behaves, and Esc closing it is what gives it back.
 
 **A lock screen: `kind: lock`.** It is not a surface painted over everything: it is `ext-session-lock`, where the *compositor* guarantees that nothing else is seen or touched while it lasts, on every monitor. So it does not exist until its `open:` is true —which is mandatory: without it the session would be locked from the start— and it goes when `open:` stops being true. Its `size:` is the box that gets centred on each monitor; what lies around it shows too, so paint the backdrop large. `lock.held`, a name that always exists, is 1 once the compositor **confirms** the session is locked: a drawn padlock certifies nothing, this does. The password goes in an `input` with `secret: true` and is checked by the logic, `sys.ask("auth.check", text.password)`. It has one copy per monitor, and its `name.width` and `name.height` are the **largest** of them, each way: a backdrop that big, centred on the box, covers every monitor, a portrait one beside a landscape one included. `screens:` puts it only on those monitors (`screens: "DP-2"`): the protocol still wants every monitor covered, so the others get plain black, and the pointer over them touches nothing. If none of those is plugged in, it goes on all of them: a lock with nowhere to type the password would be no way back.
 
@@ -506,7 +506,7 @@ Each element accepts these properties and no others; another one is an error, wi
 | `path` | `at` (what its points hang from) · `size: w, h` (what it takes up in a layout), and inside it its steps: `move x, y` (once, the first one) · `line x, y` · `curve x, y via cx, cy` · `close`. Closed, it is filled; open, or with `stroke`, it is a line |
 | …and every shape | `color` · `opacity` · `rotate` · `stroke` (the outline only) · `blend` (inside a `body`: how much it melts into what came before) · `active` · `cursor` · `carries` (below) · `show` · `label` · `agent` · `role` · `value` · `checked` · `selected` (§13, *Told to an agent*) |
 | `body` | `color` or `gradient` (below) · `rim` · `light: amount, from_y, height` · `shadow: dx, dy, blur, alpha[, color]` · `border: width, #color` · `glass` · `lens` · `opacity` · `show`, and inside it its shapes, melted into one silhouette |
-| `text` | `at` · `anchor` · `width` · `lines` · `size` · `weight` · `color` · `opacity` · `align:` `left` `center` `right` · `line_height` · `family` · `measure` · `show` · and its effects: `gradient` · `outline` · `shadow` · `letter_move` · `letter_opacity` · `letter_scale` (§8.4) · `selectable` · `selection` |
+| `text` | `at` · `anchor` · `width` · `lines` · `size` · `weight` · `color` · `opacity` · `align:` `left` `center` `right` · `line_height` · `family` · `measure` · `show` · and its effects: `gradient` · `outline` · `shadow` · `letter_move` · `letter_opacity` · `letter_scale` (§8.4) · `selectable` · `selection` · `markdown` |
 | `image` | `at` (its **top-left corner**, not its centre: it is a rectangle of pixels, not a shape) · `size` · `opacity` · `tint` · `cell: which, columns, rows` (one picture of a sheet: below) · `show` |
 | `particles` | `at` · `area` · `count` · `life` · `speed` · `direction` · `spread` · `gravity` · `drag` · `size` · `colors` · `opacity` · `shape` · `emit` or `burst` · `show`: §8.3 |
 | `shader` | `at` (its top left corner) · `size: w, h` · `corner` · `opacity` · `show` · `values: a, b, …` (up to eight numbers, any expression) · `colors: c1, c2` (up to two). What it is and how it is written: §8.1 |
@@ -839,7 +839,10 @@ must be nothing of ours that covers it: where something of the scene is solid,
 it comes back unknown. And the box itself should not cover it all either —an
 alpha of 0.88, like the lens— or the next frame does not know what is behind
 it. It is read with the same capture as the glass, so the same thing applies:
-on a compositor that does not let the screen be captured, it is always unknown.
+on a compositor that does not let the screen be captured, it is always unknown. Until
+the first capture of its box arrives it is unknown too, and nothing is put in
+its place: a glass with a lens is blurred by the compositor meanwhile, a shader
+draws what it draws with what it knows.
 
 **`z:` — what goes on top.** Groups with `z:` that are side by side (in the
 same group, or loose in the scene, even from different iterations of a
@@ -989,6 +992,12 @@ go of the selection.
 
 ```
 text r.text { at: 2, 2; width: 520; size: 13.5; color: ink; selectable: true; selection: #2f5a50 }
+```
+
+**What a model writes.** With `markdown: true` a text shows what its marks mean instead of the marks: `**bold**`, `*italic*` (and `_italic_` outside a word), `` `code` `` in the monospace font, `# a title` in bold, `- a point` as `• a point`, `> a quote` in italics, `[a link](…)` as its words, and a block between ` ``` ` lines in monospace. A star between spaces (`2 * 3`) or an underscore inside a name stays as it is, and `\*` is a star. A mark still open at the end —a model halfway through `**this`— does not show. Everything else reads the text without its marks: its letters (`letter_*`), what is selected and copied, and what an agent is told.
+
+```
+text r.text { at: 2, 2; width: 520; size: 13.5; color: ink; markdown: true; selectable: true }
 ```
 
 ## 9. Layouts
@@ -1348,8 +1357,26 @@ scene Told {
 | `toggle fact` | |
 | `emit event` · `emit event(expr)` | with a payload, which reaches the logic and the rules that read it with `on event(v)` |
 | `impulse prop -620` · `impulse pop left * 5` | a shove: it adds to the velocity of the spring. The amount is evaluated on firing, so it can depend on what is going on: a countdown's bounce shrinks with the number left |
+| `ripple zone` | a ring of light from the centre of that zone through the glass, without a press or a pointer move; nothing if the zone is hidden, inactive or off screen, or with reduced motion. A new ripple replaces the previous one. Naming a shape here makes it a zone, like any rule that names it: it stops the clicks under it |
 | `play gesture` | it asks for it; it will be granted or not, depending on its class |
 | `focus field` · `blur` | gives the writing cursor to an `input`, or takes it away |
+
+A state change can give the same glass feedback as a click, entirely in the
+renderer. In a workspace tab, for example:
+
+```plm
+scene Ripple {
+    surface { size: 240, 64 }
+    fact selected = false
+    body { color: #24332d; glass: 100%; box { from: 0, 0; size: 240, 64; corner: 16 } }
+    zone box tab { from: 16, 12; size: 80, 40 }
+    on change selected while selected { ripple tab }
+}
+```
+
+The zone's centre follows its current layout and transforms. The effect does
+not fire its `on press` rules. The logic can report the state as usual, or a
+shortcut can say `pleamar --say ripple "fact selected true"`.
 
 ## 14. Movement that carries itself
 
@@ -1515,7 +1542,7 @@ properties.arc: at radius span width
 properties.line: from to width
 properties.path: at size
 properties.body: color gradient rim light shadow border glass lens shine refraction dispersion dome ripple frost smoke milk opacity show
-properties.text: at anchor width size weight color opacity lines align line_height family measure show grow gradient outline shadow letter_move letter_opacity letter_scale selectable selection
+properties.text: at anchor width size weight color opacity lines align line_height family measure show grow gradient outline shadow letter_move letter_opacity letter_scale selectable selection markdown
 properties.image: at size opacity tint cell show grow
 properties.window: at size ask opacity show
 properties.figure: at size scale rotate pivot color opacity blend stroke show grow
@@ -1530,7 +1557,7 @@ properties.layout: at anchor gap padding align fill glass lens shine refraction 
 functions: min max abs floor ceil sin cos clamp smooth mix if vel sqrt pow fract mod sign round exp log tan atan2 length noise random pick rgb
 text_functions: upper lower
 triggers: press release scroll drag hold enter leave hover away idle key submit focus blur drop carry change still
-effects: toggle emit impulse play focus blur close promote fullscreen minimize restore float tile launch send swap workspace pick dock
+effects: toggle emit impulse ripple play focus blur close promote fullscreen minimize restore float tile launch send swap workspace pick dock
 curves: linear in_quad out_quad in_cubic out_cubic in_out_sine out_back bezier
 frame: hold emit
 classes: ambient reflex asked state
@@ -1538,7 +1565,7 @@ field_types: text number bool image
 fact_types: number bool
 model: list
 path: move line curve close
-documented: translations surface permissions model service spring prop pose fact event text image figure particles shader measure let zone body ellipse box arc line path input clip group popup component children repeat for row grid windows window pages column space between layer on every blink wave spin follow look gesture posture import scene library include part language
+documented: translations surface permissions model service spring prop pose fact event text image figure particles shader measure let zone body ellipse box arc line path input clip group popup component children repeat for row grid windows window pages column space between layer on every blink wave spin follow look ripple gesture posture import scene library include part language
 services: clock clock.seconds audio battery brightness network bluetooth media window thumbnails workspaces apps tray notifications notification_history polkit
 services.clock: hour minute second day month year weekday time date
 services.clock.seconds: hour minute second day month year weekday time date

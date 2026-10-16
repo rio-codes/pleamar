@@ -583,6 +583,9 @@ pub fn run(
     // Which edge each surface is attached to right now, so as not to ask for it twice.
     let mut levels_set: Vec<crate::scene::Level> = Vec::new();
     let mut reserves_set: Vec<i32> = Vec::new();
+    // How many frames a second at most right now: `rate:`, or its lower one
+    // while its `while` holds. 0 is the monitor's.
+    let mut rate_now: u32 = 0;
     let mut anchors_set: Vec<crate::scene::SurfaceAnchor> = Vec::new();
     let mut layers_seen: u64 = 0;
     // The "this does not compile" banner, and the good scene with it on top.
@@ -735,6 +738,12 @@ pub fn run(
                         in_flight.retain(|f| f.0 != id);
                         if !answers.contains(&id) {
                             answers.push(id);
+                        }
+                    }
+                    Ok(ToRender::Thumbnails) => {
+                        #[cfg(target_os = "linux")]
+                        if let Some(g) = &mut gpu {
+                            g.check_thumbnails();
                         }
                     }
                     Ok(m) => incoming.push(m),
@@ -937,6 +946,7 @@ pub fn run(
                         })
                     });
                     g.set_shaders(&scene.shaders);
+                    letters.allow_atlas(g.atlas_most());
                     // A scene that asks for "the full width" measures whatever its monitor measures, and it
                     // can know it: `screen.width`.
                     // A window measures whatever the compositor has given it, and that can change.
@@ -1174,7 +1184,7 @@ pub fn run(
                                 .collect(),
                             windows: nest_windows.iter().filter(|w| !w.pieces.is_empty()).count(),
                             scene: format!("{} instructions, {} properties, {} rules, {} zones", scene.instrs.len(), scene.props.len(), scene.rules.len(), scene.zones.len()),
-                            rate: scene.surface().max_fps,
+                            rate: rate_now,
                         }),
                         None => "? it was not measuring: `probe start` first".into(),
                     };
@@ -1275,6 +1285,14 @@ pub fn run(
                 }
                 ToRender::ScrollEnd => fingers_up = true,
                 ToRender::Wake | ToRender::FrameSeen => {}
+                #[cfg(target_os = "linux")]
+                ToRender::Thumbnails => {
+                    if let Some(g) = &mut gpu {
+                        g.check_thumbnails();
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                ToRender::Thumbnails => {}
                 ToRender::KeyRepeat(r) => key_repeat = r,
                 ToRender::Key(name, typed, mods, code) => {
                     last_activity = Instant::now();
@@ -2014,6 +2032,7 @@ pub fn run(
         last = now;
         let t_total = (now - start).as_secs_f32();
         let mut effects: Vec<Effect> = Vec::new();
+        let mut ripple_target = None;
         let mut keyboard_changed = false;
         let mut appointments: Vec<Instant> = Vec::new();
 
@@ -2735,6 +2754,7 @@ pub fn run(
                         let v = v.eval(Ctx { props: &props, facts: &facts, seen: None });
                         props[p.0 as usize].v += v;
                     }
+                    Effect::Ripple(z) => ripple_target = Some(z),
                     Effect::Gesture(g) => gestures_asked.push(g.0 as usize),
                     Effect::Window(action, which) => {
                         let slot = which.eval(Ctx { props: &props, facts: &facts, seen: None }).round();
@@ -3760,15 +3780,25 @@ pub fn run(
             std::thread::sleep(Duration::from_millis(8));
             continue;
         };
+        // Buffers on the card for live windows, asked by the thumbnails service.
+        #[cfg(target_os = "linux")]
+        g.answer_thumbnail_wants();
+        #[cfg(target_os = "linux")]
+        g.check_thumbnails();
         // What was uploaded to the atlas may take the slot of something that is no longer there: with
         // a new atlas, any letter may have changed without changing its `uv`.
-        if !letters.pending_upload.is_empty() {
+        if !letters.pending_upload.is_empty() || !letters.pending_fit.is_empty() {
             previous.forget();
             compose_memo = None;
         }
         // (What is written to the card waits in memory for the next thing submitted to it.)
         let wrote = !letters.pending_upload.is_empty() || !same_scene;
+        g.fit_atlas(letters.atlas_height());
         g.upload_atlas(&mut letters.pending_upload);
+        #[cfg(target_os = "linux")]
+        g.fit_thumbnails(&mut letters.pending_fit);
+        #[cfg(not(target_os = "linux"))]
+        letters.pending_fit.clear();
         if !same_scene {
             g.upload(&draw);
         }
@@ -3781,6 +3811,15 @@ pub fn run(
             let c = thread_cpu_ms();
             prof_cpu[3] += c - prof_c;
             prof_c = c;
+        }
+        // Resolve after layout: a tab may have appeared or moved in this very frame.
+        if let Some(z) = ripple_target.filter(|_| !op.reduced_motion) {
+            let c = Ctx { props: &props, facts: &facts, seen: None };
+            if let Some(p) = ripple_origin(&scene, z, c, &draw.hidden)
+                .filter(|p| sheets.iter().any(|s| s.open && crate::agent::inside_box(s.view.bounds(), *p)))
+            {
+                ripple = Some((p, Instant::now()));
+            }
         }
         let all_changed = !previous.changed_rects(&draw, &mut changed) || op.hud || finger_light > 0.0 || ripple.is_some();
         // A window that drew something new changes what its box covers, and nothing else.
@@ -3930,14 +3969,20 @@ pub fn run(
             // `PLEAMAR_NO_LENS=1`: none bends it, and the compositor blurs it.
             let (mut with_lens, mut without) = (Vec::new(), Vec::new());
             // Closed, it shows no glass: nothing behind it is blurred.
-            for (b, lens) in draw.glass_regions.iter().filter(|_| l.open).filter(|(b, _)| b[0] < v[2] && b[2] > v[0] && b[1] < v[3] && b[3] > v[1]) {
-                if *lens && !no_lens { with_lens.push(local(b)) } else { without.push(local(b)) }
+            // (A shader that reads what is behind is captured too, but never blurred instead.)
+            let mut read = Vec::new();
+            for (b, how) in draw.glass_regions.iter().filter(|_| l.open).filter(|(b, _)| b[0] < v[2] && b[2] > v[0] && b[1] < v[3] && b[3] > v[1]) {
+                match how {
+                    crate::gpu::Behind::Lens if !no_lens => with_lens.push(local(b)),
+                    crate::gpu::Behind::Read => read.push(local(b)),
+                    _ => without.push(local(b)),
+                }
             }
-            l.wants_lens = !with_lens.is_empty();
+            l.wants_lens = !with_lens.is_empty() || !read.is_empty();
             // Only what is needed is captured: the glass's box, with a
             // margin for frosting, rounded to 16 px so as not to remake
             // textures over one pixel. In Marea, the little ball and not the 820 × 680.
-            l.glass_box = with_lens.iter().copied().reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]).map(|b| {
+            l.glass_box = with_lens.iter().chain(&read).copied().reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]).map(|b| {
                 let m = crate::lens::MARGIN.ceil() as i32;
                 let (w, h) = (l.view.size.0 as i32, l.view.size.1 as i32);
                 let x0 = ((b[0] - m).max(0) / 16) * 16;
@@ -4011,6 +4056,10 @@ pub fn run(
                 crate::platform::relayer(k, wants);
             }
         }
+        rate_now = match &scene.surface().rate_while {
+            Some((low, when)) if when.is_true(Ctx { props: &props, facts: &facts, seen: None }) => *low,
+            _ => scene.surface().max_fps,
+        };
         // And the room it keeps, while something holds (`reserve: n while …`).
         if reserves_set.len() != scene.surfaces.len() {
             reserves_set = scene.surfaces.iter().map(|s| if s.reserve_while.is_some() { -1 } else { s.exclusive_zone }).collect();
@@ -4079,7 +4128,7 @@ pub fn run(
                 // With `rate:`, the scene decides the step and not the monitor: a bar
                 // that breathes does not need 165 frames per second, and painting them is what
                 // costs. Never faster than the screen, which would be no use.
-                let mhz = match scene.surface().max_fps {
+                let mhz = match rate_now {
                     0 => mhz,
                     r => mhz.min(r as i32 * 1000),
                 };
@@ -4408,7 +4457,10 @@ pub fn run(
             }
         }
         if painted + up_to_date == 0 {
-            std::thread::sleep(Duration::from_millis(8));
+            // Nothing could be painted —the screen has not handed a buffer back
+            // yet—: try again soon. Eight milliseconds were more than a whole
+            // frame at 165 Hz, and every one of these naps lost one.
+            std::thread::sleep(Duration::from_secs_f32((period_ms / 4.0).clamp(1.0, 8.0) / 1000.0));
         } else if painted > 0 && first_frame {
             first_frame = false;
             println!("render · first frame {} ms after starting", op.start_time.elapsed().as_millis());
@@ -4575,8 +4627,8 @@ pub fn run(
             // late teaches it that the screen gives 28 ms and then it is never
             // late. It is compared with the monitor's real refresh.
             let mut real = sheets.iter().find(|l| l.drives_pace).map_or(16.7, |l| 1_000_000.0 / l.mhz.max(1) as f32);
-            if scene.surface().max_fps > 0 {
-                real = real.max(1000.0 / scene.surface().max_fps as f32);
+            if rate_now > 0 {
+                real = real.max(1000.0 / rate_now as f32);
             }
             cycle.watch(real);
         }
@@ -5186,6 +5238,63 @@ struct ComposeMemo {
     order: Option<Vec<usize>>,
     selected: Option<(usize, usize, usize)>,
     signal_times: Vec<f32>,
+}
+
+fn ripple_origin(scene: &Scene, target: ZoneId, c: Ctx, hidden: &[bool]) -> Option<(f32, f32)> {
+    let zone = &scene.zones[target.0 as usize];
+    if hidden.get(zone.at).copied().unwrap_or(false) || !zone.active.is_true(c) {
+        return None;
+    }
+    let [x1, y1, x2, y2] = zone.bounds(c)?;
+    let p = ((x1 + x2) * 0.5, (y1 + y2) * 0.5);
+    let mut within = zone.within;
+    while let Some(id) = within {
+        let viewport = &scene.zones[id.0 as usize];
+        if !viewport.contains(c, p.0, p.1) { return None; }
+        within = viewport.within;
+    }
+    (p.0.is_finite() && p.1.is_finite()).then_some(p)
+}
+
+#[cfg(test)]
+mod ripple_tests {
+    use super::*;
+
+    #[test]
+    fn feedback_targets_each_component_in_its_current_layout() {
+        let (mut scene, _) = crate::language::read_file(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/ripple.plm")).unwrap();
+        let mut props: Vec<Animated> = scene.props.iter().map(|(_, x, s)| Animated::at(*x, *s)).collect();
+        let facts: Vec<f32> = scene.facts.iter().map(|(_, x)| *x).collect();
+        for b in &scene.behaviors {
+            if let Behavior::Bind { prop, to } = b {
+                props[prop.0 as usize].x = to.eval(Ctx { props: &props, facts: &facts, seen: None });
+            }
+        }
+        let targets: Vec<ZoneId> = scene.rules.iter().filter_map(|r| match r.effects.first() {
+            Some(Effect::Ripple(z)) => Some(*z),
+            _ => None,
+        }).collect();
+        // Two rules in each copy target its own zone, including one with a payload.
+        assert_eq!(targets.len(), 6);
+        for (i, pair) in targets.chunks(2).enumerate() {
+            assert_eq!(pair[0], pair[1]);
+            let c = Ctx { props: &props, facts: &facts, seen: None };
+            assert_eq!(ripple_origin(&scene, pair[0], c, &[]), Some((130.0 + i as f32 * 184.0, 120.0)));
+        }
+        let shift = scene.props.iter().position(|p| p.0 == "shift").unwrap();
+        props[shift].x = 30.0;
+        let c = Ctx { props: &props, facts: &facts, seen: None };
+        let target = targets[0];
+        assert_eq!(ripple_origin(&scene, target, c, &[]), Some((150.0, 120.0)));
+        let mut hidden = vec![false; scene.instrs.len() + 1];
+        hidden[scene.zones[target.0 as usize].at] = true;
+        assert_eq!(ripple_origin(&scene, target, c, &hidden), None);
+        scene.zones[target.0 as usize].within = Some(targets[2]);
+        assert_eq!(ripple_origin(&scene, target, c, &[]), None);
+        scene.zones[target.0 as usize].within = None;
+        scene.zones[target.0 as usize].active = Expr::K(0.0);
+        assert_eq!(ripple_origin(&scene, target, c, &[]), None);
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,18 @@
+// expect: ok
+scene Ripple {
+    surface { size: 640, 240 }
+    prop shift = 10
+    fact selected = 0
+    event show
+    component Tab(i: number) {
+        size: 80, 40
+        box hit { from: 0, 0; size: 80, 40 }
+        on change selected while selected == i { ripple hit }
+        on show(v) while v == i { ripple hit }
+    }
+    group { move: shift, 20; scale: 2
+        row { at: 20, 30; gap: 12
+            repeat i in 0..3 { Tab(i) }
+        }
+    }
+}

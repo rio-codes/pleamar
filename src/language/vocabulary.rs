@@ -27,7 +27,7 @@ pub const PROPERTIES: &[(&str, &[&str])] = &[
     ("line", &["from", "to", "width"]),
     ("path", &["at", "size"]),
     ("body", &["color", "gradient", "rim", "light", "shadow", "border", "glass", "lens", "shine", "refraction", "dispersion", "dome", "ripple", "frost", "smoke", "milk", "opacity", "show"]),
-    ("text", &["at", "anchor", "width", "size", "weight", "color", "opacity", "lines", "align", "line_height", "family", "measure", "show", "grow", "gradient", "outline", "shadow", "letter_move", "letter_opacity", "letter_scale", "selectable", "selection"]),
+    ("text", &["at", "anchor", "width", "size", "weight", "color", "opacity", "lines", "align", "line_height", "family", "measure", "show", "grow", "gradient", "outline", "shadow", "letter_move", "letter_opacity", "letter_scale", "selectable", "selection", "markdown"]),
     ("image", &["at", "size", "opacity", "tint", "cell", "show", "grow"]),
     ("window", &["at", "size", "ask", "opacity", "show"]),
     ("figure", &["at", "size", "scale", "rotate", "pivot", "color", "opacity", "blend", "stroke", "show", "grow"]),
@@ -47,7 +47,7 @@ pub const TEXT_FUNCTIONS: &[&str] = &["upper", "lower"];
 /// What can go after `on`. Any other word is the name of an event.
 pub const TRIGGERS: &[&str] = &["press", "release", "scroll", "drag", "hold", "enter", "leave", "hover", "away", "idle", "key", "submit", "focus", "blur", "drop", "carry", "change", "still"];
 /// The effects with a word of their own. Also: `prop: value ~spring` and `fact = expr`.
-pub const EFFECTS: &[&str] = &["toggle", "emit", "impulse", "play", "focus", "blur", "close", "promote", "fullscreen", "minimize", "restore", "float", "tile", "launch", "send", "swap", "workspace", "pick", "dock"];
+pub const EFFECTS: &[&str] = &["toggle", "emit", "impulse", "ripple", "play", "focus", "blur", "close", "promote", "fullscreen", "minimize", "restore", "float", "tile", "launch", "send", "swap", "workspace", "pick", "dock"];
 pub const CURVES: &[&str] = &["linear", "in_quad", "out_quad", "in_cubic", "out_cubic", "in_out_sine", "out_back", "bezier"];
 /// What a keyframe can carry besides a curve.
 pub const KEYFRAME_OPTIONS: &[&str] = &["hold", "emit"];
@@ -107,6 +107,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("spin", "`spin angle by 0.9` — adds that much per second."),
     ("follow", "`follow on = if(active == i, 1, 0)` — a property that follows an expression, with its spring."),
     ("look", "`look eye.x, eye.y at pointer reach 8, 5 within 260` — eyes that follow something."),
+    ("ripple", "`ripple hit` — a rule sends a ring of light from the centre of that zone through the glass, without pressing it. As a glass property, `ripple: 100%` sets its strength."),
     ("gesture", "`gesture cheer { … }` — a timeline of poses: the render plays it whole."),
     ("posture", "`posture tired { … }` — a still face: where the poses rest."),
     ("import", "`import \"common/palette.plm\"` — brings in a library: its colours, components and springs. `import \"menu.plm\" as menu` calls its components `menu.Row`."),
